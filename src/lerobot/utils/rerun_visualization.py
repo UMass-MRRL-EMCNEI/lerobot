@@ -21,11 +21,15 @@ importing from here directly. Requires the ``viz`` extra (``pip install 'lerobot
 
 import numbers
 import os
+import subprocess
+import threading
+import time
 
 import numpy as np
 
 from lerobot.configs import DEPTH_MILLIMETER_UNIT, infer_depth_unit
 from lerobot.types import RobotAction, RobotObservation
+import rerun
 
 from .constants import ACTION, ACTION_PREFIX, OBS_PREFIX, OBS_STR
 from .import_utils import require_package
@@ -63,6 +67,39 @@ def init_rerun(
     else:
         rr.spawn(memory_limit=memory_limit)
 
+        def move_to_touchscreen():
+            """Spawns rerun on the Mobile AI touchscreen display if it's connected."""
+            try:
+                # Check if the touchscreen is connected and abort if disconnected
+                xrandr_check = subprocess.run(["xrandr"], capture_output=True, text=True).stdout                
+                if "DP-1-4 connected" not in xrandr_check:
+                    return 
+                
+                # Check for rerun to open within 10 seconds
+                rerun_opened = False
+                for _ in range(10):
+                    wmctrl_out = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True).stdout
+                    
+                    for line in wmctrl_out.splitlines():
+                        if "Rerun Viewer" in line:
+                            rerun_opened = True
+                            break
+                    
+                    if rerun_opened:
+                        break # Window found, exit the loop early
+                        
+                    time.sleep(1) # Wait 1 second and check again 
+                
+                # Move rerun to the touchscreen coordinate and maximize to the window
+                subprocess.run(["wmctrl", "-r", "Rerun Viewer", "-e", "0,0,1080,-1,-1"])
+                subprocess.run(["wmctrl", "-r", "Rerun Viewer", "-b", "add,maximized_vert,maximized_horz"])
+                
+            except FileNotFoundError:
+                print("Warning: wmctrl or xrandr not found. Could not move window.")
+                
+        # Run thread in the background
+        threading.Thread(target=move_to_touchscreen, daemon=True).start()
+
 
 def shutdown_rerun() -> None:
     """Shuts down the Rerun SDK gracefully."""
@@ -82,14 +119,24 @@ def _build_blueprint(observation_paths: set[str], action_paths: set[str], image_
     # Safe + zero-overhead: `log_rerun_data` already ran the `require_package` guard and imported rerun.
     import rerun.blueprint as rrb
 
-    views = [rrb.Spatial2DView(origin=path, name=path) for path in sorted(image_paths)]
+    # Specify camera stream order displayed
+    def get_cam_order(path):
+        path_lower = path.lower()
+        if "left" in path_lower: return 0
+        if "high" in path_lower: return 1
+        if "right" in path_lower: return 2
+        return 3  # Put any unexpected cameras at the end
+    ordered_image_paths = sorted(image_paths, key=get_cam_order)
 
-    if observation_paths:
-        views.append(rrb.TimeSeriesView(name="observation", contents=sorted(observation_paths)))
-    if action_paths:
-        views.append(rrb.TimeSeriesView(name="action", contents=sorted(action_paths)))
+    views = [rrb.Spatial2DView(origin=path, name=path) for path in ordered_image_paths]
 
-    return rrb.Blueprint(rrb.Grid(*views))
+    # NOTE (mojo): commented out the appending of observation and action paths to view for cleaner camera stream on touchscreen 
+    # if observation_paths:
+    #     views.append(rrb.TimeSeriesView(name="observation", contents=sorted(observation_paths)))
+    # if action_paths:
+    #     views.append(rrb.TimeSeriesView(name="action", contents=sorted(action_paths)))
+
+    return rrb.Blueprint(rrb.Grid(*views), collapse_panels=True)
 
 
 def _ensure_blueprint(observation_paths: set[str], action_paths: set[str], image_paths: set[str]) -> None:
