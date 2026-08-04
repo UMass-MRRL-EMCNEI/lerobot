@@ -188,6 +188,8 @@ class RecordConfig:
     play_sounds: bool = True
     # Resume recording on an existing dataset.
     resume: bool = False
+    # Home and lock all arms during reset period
+    park_arms_reset: bool = True
 
     def __post_init__(self):
         if self.teleop is None:
@@ -245,6 +247,7 @@ def record_loop(
     display_data: bool = False,
     display_mode: str = "rerun",
     display_compressed_images: bool = False,
+    park_arms_reset: bool = False
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -279,7 +282,20 @@ def record_loop(
     no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
-    while timestamp < control_time_s:
+
+    if park_arms_reset:
+        teleop.park()
+        robot.configure()
+        while timestamp < control_time_s:
+            if events["exit_early"]:
+                events["exit_early"] = False
+                break
+            
+            timestamp = time.perf_counter() - start_episode_t
+    else:
+        teleop.unpark()
+
+    while timestamp < control_time_s and not park_arms_reset:
         start_loop_t = time.perf_counter()
 
         if events["exit_early"]:
@@ -453,9 +469,10 @@ def record(
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
             )
 
-        robot.connect()
         if teleop is not None:
             teleop.connect()
+        robot.connect()
+
 
         listener, events = init_keyboard_listener()
 
@@ -490,7 +507,7 @@ def record(
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                 ):
                     log_say("Reset the environment", cfg.play_sounds)
-
+                    
                     record_loop(
                         robot=robot,
                         events=events,
@@ -503,6 +520,8 @@ def record(
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
                         display_mode=cfg.display_mode,
+                        park_arms_reset=cfg.park_arms_reset
+                        
                     )
 
                 if events["rerecord_episode"]:
