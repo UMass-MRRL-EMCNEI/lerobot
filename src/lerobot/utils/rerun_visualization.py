@@ -28,8 +28,7 @@ import time
 import numpy as np
 
 from lerobot.configs import DEPTH_MILLIMETER_UNIT, infer_depth_unit
-from lerobot.types import RobotAction, RobotObservation
-import rerun
+from lerobot.lerobot_types import RobotAction, RobotObservation
 
 from .constants import ACTION, ACTION_PREFIX, OBS_PREFIX, OBS_STR
 from .import_utils import require_package
